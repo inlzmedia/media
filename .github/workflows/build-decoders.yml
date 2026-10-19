@@ -239,16 +239,20 @@ jobs:
         run: |
           set -eu
           ignore_abis="x86,x86_64"
-          # buildDir is redirected to buildout in gradle.properties.
           staging="staging"
           mkdir -p "${staging}"
           aars=()
-          for aar in libraries/decoder_*/buildout/outputs/aar/*-release.aar; do
-            module="$(basename "$(dirname "$(dirname "$(dirname "$aar")")")")"
-            case "${module}" in
-              decoder_ffmpeg|decoder_flac|decoder_av1|decoder_vp9) ;;
-              *) continue ;;
-            esac
+          modules=(decoder_ffmpeg decoder_flac decoder_av1 decoder_vp9)
+          for module in "${modules[@]}"; do
+            # buildDir is redirected to buildout in gradle.properties, and AGP
+            # names the file after the Gradle project (lib-decoder-<x>).
+            aar_dir="libraries/${module}/buildout/outputs/aar"
+            aar="$(find "${aar_dir}" -name '*-release.aar' -type f -print -quit || true)"
+            if [[ -z "${aar}" ]]; then
+              echo "::error::No release AAR for ${module} in ${aar_dir}."
+              ls -R "${aar_dir}" || true
+              exit 1
+            fi
             name="media3-${module//_/-}-${VERSION}.aar"
             cp "${aar}" "${staging}/${name}"
             aars+=("${staging}/${name}")
@@ -259,11 +263,6 @@ jobs:
               echo '```'
             } >> "${GITHUB_STEP_SUMMARY}"
           done
-          if [[ ${#aars[@]} -ne 4 ]]; then
-            echo "::error::Expected 4 release AARs, collected ${#aars[@]}."
-            find libraries -path '*buildout/outputs/aar*' -name '*.aar' || true
-            exit 1
-          fi
           for aar in "${aars[@]}"; do
             packaged_abis="$(
               unzip -Z1 "${aar}" \
