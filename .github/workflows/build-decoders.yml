@@ -42,10 +42,10 @@ env:
   # NDK API level for FFmpeg. Must not exceed minSdk (23). The build script
   # always builds armeabi-v7a and arm64-v8a, and additionally x86 and x86_64.
   FFMPEG_ANDROID_ABI: "21"
-  # ABIs that end up in the AARs. ffmpeg and vp9 hardcode their ABI list, and
-  # the CMake modules are not restricted either, so the packaged set is
-  # validated rather than configured.
-  EXPECTED_ABIS: armeabi-v7a,arm64-v8a
+  # ABIs that must be packaged in every AAR. ffmpeg and vp9 hardcode their ABI
+  # list and the CMake modules are not restricted, so the packaged set is
+  # validated (and cleaned up) rather than configured.
+  EXPECTED_ABIS: arm64-v8a,armeabi-v7a
   # External sources, pin them to change what gets built.
   FFMPEG_BRANCH: release/6.0
   FLAC_REF: ""
@@ -242,6 +242,12 @@ jobs:
           staging="staging"
           mkdir -p "${staging}"
           aars=()
+          # List of ABI directories an AAR contains, as "abi1,abi2".
+          packaged_abis_of() {
+            unzip -Z1 "$1" \
+              | sed -n 's#^jni/\([^/]*\)/.*$#\1#p' \
+              | sort -u | paste -sd, -
+          }
           modules=(decoder_ffmpeg decoder_flac decoder_av1 decoder_vp9)
           for module in "${modules[@]}"; do
             # buildDir is redirected to buildout in gradle.properties, and AGP
@@ -264,11 +270,7 @@ jobs:
             } >> "${GITHUB_STEP_SUMMARY}"
           done
           for aar in "${aars[@]}"; do
-            packaged_abis="$(
-              unzip -Z1 "${aar}" \
-                | sed -n 's#^jni/\([^/]*\)/.*$#\1#p' \
-                | sort -u | paste -sd, -
-            )"
+            packaged_abis="$(packaged_abis_of "${aar}")"
             # ffmpeg and vp9 hardcode the ABI list, so the arm ABIs are packaged
             # next to x86 ones. Only x86 and x86_64 are dropped from the release.
             for abi in ${ignore_abis//,/ }; do
@@ -277,13 +279,16 @@ jobs:
                 zip -q -d "${aar}" "jni/${abi}/lib*.so" "jni/${abi}/" || true
               fi
             done
-            packaged_abis="$(
-              unzip -Z1 "${aar}" \
-                | sed -n 's#^jni/\([^/]*\)/.*$#\1#p' \
-                | sort -u | paste -sd, -
-            )"
-            if [[ "${packaged_abis}" != "${EXPECTED_ABIS}" ]]; then
-              echo "::error::${aar} contains [${packaged_abis}] instead of [${EXPECTED_ABIS}]."
+            packaged_abis="$(packaged_abis_of "${aar}")"
+            # Compare as sets: the order depends on the archive entry order.
+            missing_abis=()
+            for abi in ${EXPECTED_ABIS//,/ }; do
+              if [[ ",${packaged_abis}," != *",${abi},"* ]]; then
+                missing_abis+=("${abi}")
+              fi
+            done
+            if [[ ${#missing_abis[@]} -ne 0 ]]; then
+              echo "::error::${aar} contains [${packaged_abis}], missing [${missing_abis[*]}]."
               exit 1
             fi
             echo "${aar}: ${packaged_abis}"
