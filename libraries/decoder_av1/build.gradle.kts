@@ -20,7 +20,16 @@ android {
 
   sourceSets { getByName("androidTest").assets.directories.add("../test_data/src/test/assets") }
 
-  defaultConfig { externalNativeBuild { cmake { targets.add("dav1dJNI") } } }
+  defaultConfig {
+    externalNativeBuild { cmake { targets.add("dav1dJNI") } }
+    // Optionally restrict the ABIs that are built and packaged, for example
+    // -Pmedia3.abiFilters=arm64-v8a,armeabi-v7a. All ABIs are built by default.
+    if (project.hasProperty("media3.abiFilters")) {
+      ndk.abiFilters.addAll(
+        (project.property("media3.abiFilters") as String).split(",").map { it.trim() }
+      )
+    }
+  }
 }
 
 // Configure the native build only if dav1d is present to avoid gradle sync

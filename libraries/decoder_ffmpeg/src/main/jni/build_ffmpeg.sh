@@ -102,31 +102,39 @@ make clean
 make -j$JOBS
 make install-libs
 make clean
-./configure \
-    --libdir=android-libs/x86 \
-    --arch=x86 \
-    --cpu=i686 \
-    --cross-prefix="${TOOLCHAIN_PREFIX}/i686-linux-android${ANDROID_ABI}-" \
-    --nm="${TOOLCHAIN_PREFIX}/llvm-nm" \
-    --ar="${TOOLCHAIN_PREFIX}/llvm-ar" \
-    --ranlib="${TOOLCHAIN_PREFIX}/llvm-ranlib" \
-    --strip="${TOOLCHAIN_PREFIX}/llvm-strip" \
-    --disable-asm \
-    ${COMMON_OPTIONS}
-make -j$JOBS
-make install-libs
-make clean
-./configure \
-    --libdir=android-libs/x86_64 \
-    --arch=x86_64 \
-    --cpu=x86-64 \
-    --cross-prefix="${TOOLCHAIN_PREFIX}/x86_64-linux-android${ANDROID_ABI_64BIT}-" \
-    --nm="${TOOLCHAIN_PREFIX}/llvm-nm" \
-    --ar="${TOOLCHAIN_PREFIX}/llvm-ar" \
-    --ranlib="${TOOLCHAIN_PREFIX}/llvm-ranlib" \
-    --strip="${TOOLCHAIN_PREFIX}/llvm-strip" \
-    --disable-asm \
-    ${COMMON_OPTIONS}
-make -j$JOBS
-make install-libs
-make clean
+
+# The x86 ABIs are optional to shorten builds. Set BUILD_X86_ABIS=0 to skip them.
+if [[ "${BUILD_X86_ABIS:-1}" == "1" ]]
+then
+    echo "Building x86 and x86_64 (set BUILD_X86_ABIS=0 to skip)"
+    ./configure \
+        --libdir=android-libs/x86 \
+        --arch=x86 \
+        --cpu=i686 \
+        --cross-prefix="${TOOLCHAIN_PREFIX}/i686-linux-android${ANDROID_ABI}-" \
+        --nm="${TOOLCHAIN_PREFIX}/llvm-nm" \
+        --ar="${TOOLCHAIN_PREFIX}/llvm-ar" \
+        --ranlib="${TOOLCHAIN_PREFIX}/llvm-ranlib" \
+        --strip="${TOOLCHAIN_PREFIX}/llvm-strip" \
+        --disable-asm \
+        ${COMMON_OPTIONS}
+    make -j$JOBS
+    make install-libs
+    make clean
+    ./configure \
+        --libdir=android-libs/x86_64 \
+        --arch=x86_64 \
+        --cpu=x86-64 \
+        --cross-prefix="${TOOLCHAIN_PREFIX}/x86_64-linux-android${ANDROID_ABI_64BIT}-" \
+        --nm="${TOOLCHAIN_PREFIX}/llvm-nm" \
+        --ar="${TOOLCHAIN_PREFIX}/llvm-ar" \
+        --ranlib="${TOOLCHAIN_PREFIX}/llvm-ranlib" \
+        --strip="${TOOLCHAIN_PREFIX}/llvm-strip" \
+        --disable-asm \
+        ${COMMON_OPTIONS}
+    make -j$JOBS
+    make install-libs
+    make clean
+else
+    echo "Skipping x86 and x86_64 because BUILD_X86_ABIS is ${BUILD_X86_ABIS}"
+fi
