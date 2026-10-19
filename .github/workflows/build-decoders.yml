@@ -162,17 +162,30 @@ jobs:
           cd libraries/decoder_vp9/src/main/jni
           git clone --depth=1 --branch "${LIBVPX_VERSION}" \
             https://chromium.googlesource.com/webm/libvpx
+          # The script probes the host compiler with clang only flags, so its
+          # "unrecognized command-line option" noise and the missing vp8_rtcd.h
+          # (VP8 is disabled) are harmless. Do not rely on its exit code, check
+          # the generated headers instead.
           ./generate_libvpx_android_configs.sh
+          for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+            for header in vpx_config.h vp9_rtcd.h vpx_dsp_rtcd.h libvpx_srcs.txt; do
+              if [[ ! -s "libvpx_android_configs/${abi}/${header}" ]]; then
+                echo "::error::libvpx_android_configs/${abi}/${header} is missing."
+                exit 1
+              fi
+            done
+          done
           # Application.mk builds armeabi-v7a, x86, arm64-v8a and x86_64. The
           # module packages prebuilt libraries from src/main/libs, so send the
-          # ndk-build output there.
+          # ndk-build output there. The module is selected through the
+          # NDK_MODULE_NAME variable, a bare trailing name is not a make target.
           rm -rf ../libs
           "${ANDROID_NDK_HOME}/ndk-build" \
             NDK_PROJECT_PATH=. \
             APP_BUILD_SCRIPT=./Android.mk \
             APP_APPLICATION_MK=./Application.mk \
+            NDK_MODULE_NAME=libvpxV2JNI \
             NDK_LIBS_OUT="$(pwd)/../libs" \
-            libvpxV2JNI \
             JNI_LIBS_OUT="$(pwd)/../libs" \
             -j"$(nproc)"
           ls -l ../libs/*/*.so
