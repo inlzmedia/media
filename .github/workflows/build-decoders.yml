@@ -1,11 +1,11 @@
-# Builds the media3 decoder extensions that require a manual native build
-# (ffmpeg, flac, av1, vp9) and publishes the resulting release AARs.
+# Builds the media3 decoder extensions that need a manually built native
+# library (ffmpeg, flac, av1, vp9) and publishes the resulting release AARs as a
+# workflow artifact and as a draft GitHub Release.
 #
-# libopus was dropped from this workflow: the arm64 NEON FFT assembly in
-# upstream libopus currently fails to link into a shared library, see
-# "relocation R_AARCH64_ADR_PREL_PG_HI21 cannot be used against symbol
-# celt_tx_tab_53". Re-add ":lib-decoder-opus" (and its libopus clone step) once
-# the upstream revision is fixed and pinned through OPUS_REF below.
+# The modules and their build scripts are used exactly as committed: this
+# workflow only prepares the external native sources and tooling, and patches
+# nothing in the repository. Where a module hardcodes the ABI list, the extra
+# ABIs are simply not packaged (see the AAR validation step).
 #
 # Trigger it manually from the Actions tab, or push a tag matching
 # "decoder-build-*" (the tag suffix is used as the version).
@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version used in the artifact/release file names.
+        description: Version used in the AAR and release names.
         required: true
         default: 1.11.1
         type: string
@@ -23,11 +23,6 @@ on:
         description: Comma or space separated FFmpeg decoders to enable.
         required: true
         default: aac,aac_latm,mp3,flac,vorbis,ac3,eac3,alac,amrnb,amrwb,g711,g722
-        type: string
-      target_abis:
-        description: Comma separated Android ABIs to build and package.
-        required: true
-        default: arm64-v8a,armeabi-v7a
         type: string
       create_release:
         description: Create a draft GitHub Release with the AARs attached.
@@ -44,21 +39,20 @@ permissions:
 env:
   NDK_VERSION: 27.2.12479018
   HOST_PLATFORM: linux-x86_64
-  # NDK API level used when building FFmpeg, read by the "Resolve inputs" step.
-  # It must not exceed minSdk (23).
+  # NDK API level for FFmpeg. Must not exceed minSdk (23). The build script
+  # always builds armeabi-v7a and arm64-v8a, and additionally x86 and x86_64.
   FFMPEG_ANDROID_ABI: "21"
-  # Only the arm ABIs are built; set to 1 to also build x86 and x86_64.
-  BUILD_X86_ABIS: "0"
-  # Official dav1d repository. Override here if it becomes unreachable.
-  DAV1D_REPO: https://code.videolan.org/videolan/dav1d.git
-  # Tagged revision of libvpx used by the vp9 module.
-  LIBVPX_VERSION: v1.15.2
-  # Branch or tag of libflac used by the flac module (empty means default branch).
+  # ABIs that end up in the AARs. ffmpeg and vp9 hardcode their ABI list, and
+  # the CMake modules are not restricted either, so the packaged set is
+  # validated rather than configured.
+  EXPECTED_ABIS: armeabi-v7a,arm64-v8a
+  # External sources, pin them to change what gets built.
+  FFMPEG_BRANCH: release/6.0
   FLAC_REF: ""
-  # Space separated FFmpeg decoders, derived from the workflow inputs.
+  DAV1D_REPO: https://code.videolan.org/videolan/dav1d.git
+  LIBVPX_VERSION: v1.15.2
+  # Space separated defaults, used when running from a tag.
   DEFAULT_FFMPEG_DECODERS: aac aac_latm mp3 flac vorbis ac3 eac3 alac amrnb amrwb g711 g722
-  # Space separated ABIs, derived from the workflow inputs.
-  DEFAULT_TARGET_ABIS: arm64-v8a armeabi-v7a
 
 jobs:
   build:
@@ -72,11 +66,9 @@ jobs:
         env:
           INPUT_VERSION: ${{ github.event.inputs.version }}
           INPUT_FFMPEG_DECODERS: ${{ github.event.inputs.ffmpeg_decoders }}
-          INPUT_TARGET_ABIS: ${{ github.event.inputs.target_abis }}
           INPUT_CREATE_RELEASE: ${{ github.event.inputs.create_release }}
           DEFAULT_FFMPEG_DECODERS: ${{ env.DEFAULT_FFMPEG_DECODERS }}
-          DEFAULT_TARGET_ABIS: ${{ env.DEFAULT_TARGET_ABIS }}
-          FFMPEG_ANDROID_ABI: ${{ env.FFMPEG_ANDROID_ABI }}
+          EXPECTED_ABIS: ${{ env.EXPECTED_ABIS }}
         run: |
           set -eu
           tag_version=""
@@ -88,44 +80,24 @@ jobs:
             echo "::error::Unable to determine the version to build."
             exit 1
           fi
-          # Inputs accept commas and/or spaces as separators, the scripts need spaces.
+          # The FFmpeg script takes the decoders as separate arguments.
           decoders="${INPUT_FFMPEG_DECODERS:-${DEFAULT_FFMPEG_DECODERS}}"
           decoders="$(echo "${decoders}" | tr ',' ' ')"
-          decoders="${decoders//$'\n'/ }"
           read -r -a decoder_list <<< "${decoders}"
           ffmpeg_decoders="${decoder_list[*]}"
-          abis="${INPUT_TARGET_ABIS:-${DEFAULT_TARGET_ABIS}}"
-          abis="$(echo "${abis}" | tr ',' ' ')"
-          abis="${abis//$'\n'/ }"
-          read -r -a abi_list <<< "${abis}"
-          target_abis="${abi_list[*]}"
-          target_abis_csv="${target_abis// /,}"
-          for abi in "${abi_list[@]}"; do
-            case "${abi}" in
-              arm64-v8a|armeabi-v7a|x86|x86_64) ;;
-              *)
-                echo "::error::Unsupported ABI '${abi}'."
-                exit 1
-                ;;
-            esac
-          done
           if [[ -z "${ffmpeg_decoders}" ]]; then
             echo "::error::At least one FFmpeg decoder is required."
             exit 1
           fi
-          create_release="${INPUT_CREATE_RELEASE:-true}"
           {
             echo "version=${version}"
             echo "ffmpeg_decoders=${ffmpeg_decoders}"
-            echo "ffmpeg_android_abi=${FFMPEG_ANDROID_ABI}"
-            echo "target_abis=${target_abis}"
-            echo "target_abis_csv=${target_abis_csv}"
-            echo "create_release=${create_release}"
+            echo "create_release=${INPUT_CREATE_RELEASE:-true}"
           } >> "${GITHUB_OUTPUT}"
           {
             echo "### Decoder build"
             echo "- version: \`${version}\`"
-            echo "- ABIs: \`${target_abis}\`"
+            echo "- ABIs: \`${EXPECTED_ABIS}\`"
             echo "- FFmpeg decoders: \`${ffmpeg_decoders}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
@@ -146,21 +118,24 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          # The default is "tools platform-tools", but Google no longer ships
-          # the "tools" package, so "sdkmanager tools" fails. Override it.
+          # The default value is "tools platform-tools", but Google no longer
+          # ships the "tools" package, which makes "sdkmanager tools" fail.
           packages: platform-tools
 
       - name: Install Android SDK packages
         shell: bash
         run: |
           set -eu
-          # --sdk_root avoids sdkmanager failing on a stale local repository.
           sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
             "platforms;android-36" \
             "build-tools;36.0.0" \
             "cmake;3.22.1" \
             "ndk;${NDK_VERSION}"
-          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}" >> "${GITHUB_ENV}"
+          {
+            echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
+            # Pin the NDK used by AGP instead of whatever the image ships.
+            echo "ANDROID_NDK_ROOT=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
+          } >> "${GITHUB_ENV}"
 
       - name: Install native build tools
         shell: bash
@@ -172,33 +147,35 @@ jobs:
 
       - name: Fetch and build dav1d (av1)
         shell: bash
-        env:
-          TARGET_ABIS: ${{ steps.resolve.outputs.target_abis }}
         run: |
           set -eu
           cd libraries/decoder_av1/src/main/jni
           git clone --depth=1 https://github.com/google/cpu_features
           git clone --depth=1 "${DAV1D_REPO}" dav1d
+          # Builds every ABI listed in the script (arm and x86).
           ./build_dav1d.sh "$(pwd)/.." "${ANDROID_NDK_HOME}" "${HOST_PLATFORM}"
 
       - name: Fetch and build libvpx (vp9)
         shell: bash
-        env:
-          TARGET_ABIS: ${{ steps.resolve.outputs.target_abis }}
         run: |
           set -eu
           cd libraries/decoder_vp9/src/main/jni
           git clone --depth=1 --branch "${LIBVPX_VERSION}" \
             https://chromium.googlesource.com/webm/libvpx
           ./generate_libvpx_android_configs.sh
-          # libvpx_android_configs holds every ABI; only build the requested ones.
-          abi_list="$(echo "${TARGET_ABIS}" | tr ' ' ',')"
+          # Application.mk builds armeabi-v7a, x86, arm64-v8a and x86_64. The
+          # module packages prebuilt libraries from src/main/libs, so send the
+          # ndk-build output there.
+          rm -rf ../libs
           "${ANDROID_NDK_HOME}/ndk-build" \
             NDK_PROJECT_PATH=. \
             APP_BUILD_SCRIPT=./Android.mk \
             APP_APPLICATION_MK=./Application.mk \
-            APP_ABI="${abi_list}" \
+            NDK_LIBS_OUT="$(pwd)/../libs" \
+            libvpxV2JNI \
+            JNI_LIBS_OUT="$(pwd)/../libs" \
             -j"$(nproc)"
+          ls -l ../libs/*/*.so
 
       - name: Fetch flac source
         shell: bash
@@ -218,15 +195,11 @@ jobs:
         shell: bash
         env:
           FFMPEG_DECODERS: ${{ steps.resolve.outputs.ffmpeg_decoders }}
-          FFMPEG_ANDROID_ABI: ${{ steps.resolve.outputs.ffmpeg_android_abi }}
-          TARGET_ABIS: ${{ steps.resolve.outputs.target_abis }}
+          FFMPEG_BRANCH: ${{ env.FFMPEG_BRANCH }}
         run: |
           set -eu
-          if [[ "${TARGET_ABIS}" != "arm64-v8a armeabi-v7a" ]]; then
-            echo "::warning::Only arm64-v8a and armeabi-v7a are supported for FFmpeg, the '${TARGET_ABIS}' input is not applied."
-          fi
           cd libraries/decoder_ffmpeg/src/main/jni
-          git clone --depth=1 --branch release/6.0 \
+          git clone --depth=1 --branch "${FFMPEG_BRANCH}" \
             https://github.com/FFmpeg/FFmpeg.git ffmpeg
           # shellcheck disable=SC2086 # The decoder list must be word split.
           ./build_ffmpeg.sh "$(pwd)/.." "${ANDROID_NDK_HOME}" "${HOST_PLATFORM}" \
@@ -234,50 +207,74 @@ jobs:
 
       - name: Build release AARs
         shell: bash
-        env:
-          TARGET_ABIS: ${{ steps.resolve.outputs.target_abis }}
-          TARGET_ABIS_CSV: ${{ steps.resolve.outputs.target_abis_csv }}
         run: |
           set -eu
-          gradle_args=()
-          if [[ "${TARGET_ABIS}" == "arm64-v8a armeabi-v7a" ]]; then
-            # FFmpeg only has pre-built binaries for the arm ABIs.
-            gradle_args+=("-Pmedia3.abiFilters=${TARGET_ABIS_CSV}")
-          else
-            echo "::warning::Not restricting Gradle to ${TARGET_ABIS}; the FFmpeg AAR keeps the arm ABIs only."
-          fi
+          # libopus is left out: upstream libopus currently fails to link its
+          # arm64 NEON FFT assembly into a shared library
+          # ("R_AARCH64_ADR_PREL_PG_HI21 ... celt_tx_tab_53").
           ./gradlew --no-daemon \
             :lib-decoder-ffmpeg:assembleRelease \
             :lib-decoder-flac:assembleRelease \
             :lib-decoder-av1:assembleRelease \
-            :lib-decoder-vp9:assembleRelease \
-            "${gradle_args[@]}"
+            :lib-decoder-vp9:assembleRelease
 
-      - name: Collect AARs
+      - name: Collect and validate AARs
         shell: bash
         env:
           VERSION: ${{ steps.resolve.outputs.version }}
-          TARGET_ABIS_CSV: ${{ steps.resolve.outputs.target_abis_csv }}
+          EXPECTED_ABIS: ${{ env.EXPECTED_ABIS }}
         run: |
           set -eu
-          mkdir -p staging
-          modules=(decoder_ffmpeg decoder_flac decoder_av1 decoder_vp9)
-          for module in "${modules[@]}"; do
-            # buildDir is redirected to buildout in gradle.properties.
-            aar="$(find "libraries/${module}/buildout/outputs/aar" -name '*-release.aar' -type f | sort | head -n 1)"
-            if [[ -z "${aar}" ]]; then
-              echo "::error::No release AAR found for ${module}."
+          ignore_abis="x86,x86_64"
+          # buildDir is redirected to buildout in gradle.properties.
+          staging="staging"
+          mkdir -p "${staging}"
+          aars=()
+          for aar in libraries/decoder_*/buildout/outputs/aar/*-release.aar; do
+            module="$(basename "$(dirname "$(dirname "$(dirname "$aar")")")")"
+            case "${module}" in
+              decoder_ffmpeg|decoder_flac|decoder_av1|decoder_vp9) ;;
+              *) continue ;;
+            esac
+            name="media3-${module//_/-}-${VERSION}.aar"
+            cp "${aar}" "${staging}/${name}"
+            aars+=("${staging}/${name}")
+            {
+              echo "### ${name}"
+              echo '```'
+              unzip -l "${staging}/${name}" | grep -E 'jni/|classes.jar' || true
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY}"
+          done
+          if [[ ${#aars[@]} -ne 4 ]]; then
+            echo "::error::Expected 4 release AARs, collected ${#aars[@]}."
+            find libraries -path '*buildout/outputs/aar*' -name '*.aar' || true
+            exit 1
+          fi
+          for aar in "${aars[@]}"; do
+            packaged_abis="$(
+              unzip -Z1 "${aar}" \
+                | sed -n 's#^jni/\([^/]*\)/.*$#\1#p' \
+                | sort -u | paste -sd, -
+            )"
+            # ffmpeg and vp9 hardcode the ABI list, so the arm ABIs are packaged
+            # next to x86 ones. Only x86 and x86_64 are dropped from the release.
+            for abi in ${ignore_abis//,/ }; do
+              if [[ ",${packaged_abis}," == *",${abi},"* ]]; then
+                # Delete the .so and the ABI directory entry from the archive.
+                zip -q -d "${aar}" "jni/${abi}/lib*.so" "jni/${abi}/" || true
+              fi
+            done
+            packaged_abis="$(
+              unzip -Z1 "${aar}" \
+                | sed -n 's#^jni/\([^/]*\)/.*$#\1#p' \
+                | sort -u | paste -sd, -
+            )"
+            if [[ "${packaged_abis}" != "${EXPECTED_ABIS}" ]]; then
+              echo "::error::${aar} contains [${packaged_abis}] instead of [${EXPECTED_ABIS}]."
               exit 1
             fi
-            staged="staging/media3-${module//_/-}-${VERSION}.aar"
-            cp "${aar}" "${staged}"
-            echo "${staged}"
-            unzip -l "${staged}" | grep 'jni/'
-            packaged_abis="$(unzip -Z1 "${staged}" | sed -n 's#^jni/\([^/]*\)/.*$#\1#p' | sort -u)"
-            if [[ "${packaged_abis//$'\n'/,}" != "${TARGET_ABIS_CSV}" ]]; then
-              echo "::error::${staged} contains [${packaged_abis//$'\n'/,}] instead of [${TARGET_ABIS_CSV}]."
-              exit 1
-            fi
+            echo "${aar}: ${packaged_abis}"
           done
 
       - name: Upload AARs
@@ -299,13 +296,13 @@ jobs:
             Release AARs for the media3 decoder extensions.
 
             - Built from `${{ github.sha }}`
-            - ABIs: `${{ steps.resolve.outputs.target_abis }}`
+            - ABIs: `${{ env.EXPECTED_ABIS }}`
             - FFmpeg decoders: `${{ steps.resolve.outputs.ffmpeg_decoders }}`
 
             The AARs depend on the matching `androidx.media3` release
             (`${{ steps.resolve.outputs.version }}`). FFmpeg, libflac, dav1d and
             libvpx are licensed separately, see each module's README.
 
-            The `media3-decoder-opus` AAR is not part of this release yet.
+            `media3-decoder-opus` is not part of this release.
           files: staging/*.aar
           draft: true

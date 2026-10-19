@@ -69,12 +69,7 @@ trap 'rm -rf "${BUILD_ROOT}"' EXIT
 echo "Created temporary build root: ${BUILD_ROOT}"
 
 
-# The ABIs to build, space separated.
-# Override with TARGET_ABIS to shorten builds, for example "arm64-v8a armeabi-v7a".
-TARGET_ABIS="${TARGET_ABIS:-arm64-v8a armeabi-v7a x86_64 x86}"
-echo "Building dav1d for ${TARGET_ABIS}"
-
-for android_abi in ${TARGET_ABIS}; do
+for android_abi in "${!ABI_MAP[@]}"; do
     ndk_target=${NDK_TARGET_MAP[$android_abi]}
     original_cross_file="${ABI_MAP[$android_abi]}.meson"
 

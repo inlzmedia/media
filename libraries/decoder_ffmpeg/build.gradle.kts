@@ -17,16 +17,6 @@ android {
   namespace = "androidx.media3.decoder.ffmpeg"
 
   sourceSets { getByName("androidTest").assets.directories.add("../test_data/src/test/assets") }
-
-  // Optionally restrict the ABIs that are built and packaged, for example
-  // -Pmedia3.abiFilters=arm64-v8a,armeabi-v7a. All ABIs are built by default.
-  if (project.hasProperty("media3.abiFilters")) {
-    defaultConfig {
-      ndk.abiFilters.addAll(
-        (project.property("media3.abiFilters") as String).split(",").map { it.trim() }
-      )
-    }
-  }
 }
 
 // Configure the native build only if ffmpeg is present to avoid gradle sync
