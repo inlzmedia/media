@@ -1,5 +1,11 @@
 # Builds the media3 decoder extensions that require a manual native build
-# (ffmpeg, flac, opus, av1, vp9) and publishes the resulting release AARs.
+# (ffmpeg, flac, av1, vp9) and publishes the resulting release AARs.
+#
+# libopus was dropped from this workflow: the arm64 NEON FFT assembly in
+# upstream libopus currently fails to link into a shared library, see
+# "relocation R_AARCH64_ADR_PREL_PG_HI21 cannot be used against symbol
+# celt_tx_tab_53". Re-add ":lib-decoder-opus" (and its libopus clone step) once
+# the upstream revision is fixed and pinned through OPUS_REF below.
 #
 # Trigger it manually from the Actions tab, or push a tag matching
 # "decoder-build-*" (the tag suffix is used as the version).
@@ -16,7 +22,7 @@ on:
       ffmpeg_decoders:
         description: Comma or space separated FFmpeg decoders to enable.
         required: true
-        default: aac,aac_latm,mp3,flac,opus,vorbis,ac3,eac3,alac,amrnb,amrwb,g711,g722
+        default: aac,aac_latm,mp3,flac,vorbis,ac3,eac3,alac,amrnb,amrwb,g711,g722
         type: string
       target_abis:
         description: Comma separated Android ABIs to build and package.
@@ -47,8 +53,10 @@ env:
   DAV1D_REPO: https://code.videolan.org/videolan/dav1d.git
   # Tagged revision of libvpx used by the vp9 module.
   LIBVPX_VERSION: v1.15.2
+  # Branch or tag of libflac used by the flac module (empty means default branch).
+  FLAC_REF: ""
   # Space separated FFmpeg decoders, derived from the workflow inputs.
-  DEFAULT_FFMPEG_DECODERS: aac aac_latm mp3 flac opus vorbis ac3 eac3 alac amrnb amrwb g711 g722
+  DEFAULT_FFMPEG_DECODERS: aac aac_latm mp3 flac vorbis ac3 eac3 alac amrnb amrwb g711 g722
   # Space separated ABIs, derived from the workflow inputs.
   DEFAULT_TARGET_ABIS: arm64-v8a armeabi-v7a
 
@@ -192,14 +200,19 @@ jobs:
             APP_ABI="${abi_list}" \
             -j"$(nproc)"
 
-      - name: Fetch flac and opus sources
+      - name: Fetch flac source
         shell: bash
+        env:
+          FLAC_REF: ${{ env.FLAC_REF }}
         run: |
           set -eu
-          git clone --depth=1 https://github.com/xiph/flac.git \
+          ref_args=()
+          if [[ -n "${FLAC_REF}" ]]; then
+            ref_args=(--branch "${FLAC_REF}")
+          fi
+          git clone --depth=1 "${ref_args[@]}" https://github.com/xiph/flac.git \
             libraries/decoder_flac/src/main/jni/libflac
-          git clone --depth=1 https://github.com/xiph/opus.git \
-            libraries/decoder_opus/src/main/jni/libopus
+          git -C libraries/decoder_flac/src/main/jni/libflac log --oneline -1
 
       - name: Fetch and build FFmpeg (ffmpeg)
         shell: bash
@@ -236,7 +249,6 @@ jobs:
           ./gradlew --no-daemon \
             :lib-decoder-ffmpeg:assembleRelease \
             :lib-decoder-flac:assembleRelease \
-            :lib-decoder-opus:assembleRelease \
             :lib-decoder-av1:assembleRelease \
             :lib-decoder-vp9:assembleRelease \
             "${gradle_args[@]}"
@@ -249,7 +261,7 @@ jobs:
         run: |
           set -eu
           mkdir -p staging
-          modules=(decoder_ffmpeg decoder_flac decoder_opus decoder_av1 decoder_vp9)
+          modules=(decoder_ffmpeg decoder_flac decoder_av1 decoder_vp9)
           for module in "${modules[@]}"; do
             # buildDir is redirected to buildout in gradle.properties.
             aar="$(find "libraries/${module}/buildout/outputs/aar" -name '*-release.aar' -type f | sort | head -n 1)"
@@ -291,7 +303,9 @@ jobs:
             - FFmpeg decoders: `${{ steps.resolve.outputs.ffmpeg_decoders }}`
 
             The AARs depend on the matching `androidx.media3` release
-            (`${{ steps.resolve.outputs.version }}`). FFmpeg, libflac, libopus,
-            dav1d and libvpx are licensed separately, see each module's README.
+            (`${{ steps.resolve.outputs.version }}`). FFmpeg, libflac, dav1d and
+            libvpx are licensed separately, see each module's README.
+
+            The `media3-decoder-opus` AAR is not part of this release yet.
           files: staging/*.aar
           draft: true
