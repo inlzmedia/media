@@ -137,12 +137,17 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The default is "tools platform-tools", but Google no longer ships
+          # the "tools" package, so "sdkmanager tools" fails. Override it.
+          packages: platform-tools
 
       - name: Install Android SDK packages
         shell: bash
         run: |
           set -eu
-          sdkmanager --install \
+          # --sdk_root avoids sdkmanager failing on a stale local repository.
+          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
             "platforms;android-36" \
             "build-tools;36.0.0" \
             "cmake;3.22.1" \
